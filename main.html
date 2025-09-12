@@ -1,0 +1,222 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Trailblazer Daily Puzzle (Solvable)</title>
+<style>
+  body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin: 20px; }
+  #modeSelect { margin-bottom: 10px; }
+  #timer { margin-top: 10px; font-size: 18px; }
+  #board { display: grid; gap: 2px; margin-top: 10px; }
+  .tile { width: 60px; height: 60px; display: flex; justify-content: center; align-items: center; cursor: pointer; border-radius: 5px; font-weight: bold; font-size: 18px; user-select: none; }
+  .path { box-shadow: 0 0 5px 3px #555 inset; }
+</style>
+</head>
+<body>
+
+<h2>Trailblazer Daily Puzzle</h2>
+
+<div id="modeSelect">
+  Mode: 
+  <select id="mode">
+    <option value="color">Color Changes</option>
+    <option value="time">Timed</option>
+  </select>
+</div>
+
+<div id="timer">Color Changes: 0 | Time: 0.0s | Par: 0</div>
+<div id="board"></div>
+<button id="resetBtn" style="margin-top:10px;">Restart Puzzle</button>
+
+<script>
+const N = 5;
+let board = [];
+let path = [];
+let visited = new Set();
+let colorChanges = 0;
+let parColorChanges = 0;
+let timer = 0;
+let intervalId = null;
+let activeColor = null;
+let gameMode = 'color';
+
+const colors = ["#e63946","#f1faee","#a8dadc","#457b9d","#1d3557"];
+
+const boardDiv = document.getElementById('board');
+const timerDiv = document.getElementById('timer');
+const modeSelect = document.getElementById('mode');
+const resetBtn = document.getElementById('resetBtn');
+
+modeSelect.addEventListener('change', ()=> { gameMode = modeSelect.value; updateDisplay(); });
+resetBtn.addEventListener('click', initGame);
+
+// Simple deterministic seed from date
+function seed(dateStr){
+  let hash = 0;
+  for(let i=0;i<dateStr.length;i++) hash = (hash*31 + dateStr.charCodeAt(i)) & 0xffffffff;
+  return hash;
+}
+
+// Simple PRNG using seed
+function randomSeeded(seed) {
+  let x = Math.sin(seed++)*10000;
+  return x - Math.floor(x);
+}
+
+// Generate a guaranteed solvable board
+function generateBoard() {
+  const today = new Date();
+  const seedVal = seed(today.toISOString().slice(0,10));
+  
+  // 1. Generate solvable path (snake through grid)
+  path = [];
+  for(let r=0;r<N;r++){
+    if(r%2===0){
+      for(let c=0;c<N;c++) path.push({r,c});
+    } else {
+      for(let c=N-1;c>=0;c--) path.push({r,c});
+    }
+  }
+
+  // Shuffle colors deterministically for segments
+  const numSegments = Math.floor(3 + randomSeeded(seedVal)*3); // 3-5 segments
+  parColorChanges = numSegments-1;
+
+  const segmentLengths = [];
+  let baseLen = Math.floor(path.length / numSegments);
+  let remainder = path.length % numSegments;
+  for(let i=0;i<numSegments;i++){
+    segmentLengths.push(baseLen + (remainder>0 ? 1 : 0));
+    remainder--;
+  }
+
+  // Assign colors to segments
+  let boardColors = [];
+  let segIndex = 0;
+  let colorIndex = Math.floor(randomSeeded(seedVal)*colors.length);
+  let usedColors = [];
+  let countInSegment = 0;
+  for(let i=0;i<path.length;i++){
+    if(countInSegment===segmentLengths[segIndex]){
+      segIndex++;
+      countInSegment=0;
+      // pick next color different from previous
+      let newColor;
+      do { newColor = Math.floor(randomSeeded(seedVal+i)*colors.length); } while(newColor===colorIndex);
+      colorIndex=newColor;
+    }
+    boardColors.push(colorIndex);
+    countInSegment++;
+  }
+
+  // Fill board array
+  board = Array(N).fill(0).map(()=>Array(N).fill(0));
+  for(let i=0;i<path.length;i++){
+    const {r,c} = path[i];
+    board[r][c] = boardColors[i];
+  }
+}
+
+function initGame() {
+  generateBoard();
+  visited = new Set();
+  colorChanges = 0;
+  timer = 0;
+  activeColor = null;
+  clearInterval(intervalId);
+  intervalId = null;
+  drawBoard();
+  updateDisplay();
+}
+
+function drawBoard(){
+  boardDiv.style.gridTemplateColumns = `repeat(${N},60px)`;
+  boardDiv.innerHTML = '';
+  for(let r=0;r<N;r++){
+    for(let c=0;c<N;c++){
+      const tile = document.createElement('div');
+      tile.className = 'tile';
+      tile.style.backgroundColor = colors[board[r][c]];
+      tile.dataset.r = r;
+      tile.dataset.c = c;
+      if(visited.has(`${r}_${c}`)) tile.classList.add('path');
+      tile.addEventListener('pointerdown', handleTileClick);
+      tile.addEventListener('pointerover', handleTileHover);
+      boardDiv.appendChild(tile);
+    }
+  }
+}
+
+function handleTileClick(e){
+  const r = parseInt(e.target.dataset.r);
+  const c = parseInt(e.target.dataset.c);
+  if(path.length===0) return; // safety
+  if(visited.size===0){
+    pathStart({r,c});
+    return;
+  }
+  extendPath({r,c});
+  drawBoard();
+  checkCompletion();
+  updateDisplay();
+}
+
+function handleTileHover(e){
+  if(e.buttons!==1) return;
+  handleTileClick(e);
+}
+
+function pathStart(cell){
+  path.push(cell);
+  visited.add(`${cell.r}_${cell.c}`);
+  activeColor = board[cell.r][cell.c];
+  startTimerIfNeeded();
+}
+
+function extendPath(cell){
+  const last = path[path.length-1];
+  const tileColor = board[cell.r][cell.c];
+  if(tileColor !== activeColor){
+    activeColor = tileColor;
+    colorChanges++;
+  }
+  if(isAdjacent(last,cell) && !visited.has(`${cell.r}_${cell.c}`)){
+    path.push(cell);
+    visited.add(`${cell.r}_${cell.c}`);
+  }
+}
+
+function isAdjacent(a,b){
+  const dr = Math.abs(a.r-b.r);
+  const dc = Math.abs(a.c-b.c);
+  return (dr+dc===1);
+}
+
+function updateDisplay(){
+  if(gameMode==='color') timerDiv.innerText = `Color Changes: ${colorChanges} | Time: ${timer.toFixed(1)}s | Par: ${parColorChanges}`;
+  else timerDiv.innerText = `Time: ${timer.toFixed(1)}s | Color Changes: ${colorChanges} | Par: ${parColorChanges}`;
+}
+
+function startTimerIfNeeded(){
+  if(intervalId) return;
+  intervalId = setInterval(()=>{
+    timer +=0.1;
+    updateDisplay();
+  },100);
+}
+
+function checkCompletion(){
+  if(visited.size===N*N){
+    clearInterval(intervalId);
+    alert(`🎉 Daily Trailblazer Complete!
+Color Changes: ${colorChanges}
+Time: ${timer.toFixed(1)}s
+Par Color Changes: ${parColorChanges}`);
+  }
+}
+
+initGame();
+</script>
+</body>
+</html>
