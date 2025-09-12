@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Trailblazer Daily Puzzle (Solvable)</title>
+<title>Trailblazer Daily Puzzle (Scaled Difficulty)</title>
 <style>
   body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin: 20px; }
   #modeSelect { margin-bottom: 10px; }
@@ -30,7 +30,7 @@
 <button id="resetBtn" style="margin-top:10px;">Restart Puzzle</button>
 
 <script>
-const N = 5;
+let N = 5;
 let board = [];
 let path = [];
 let visited = new Set();
@@ -51,25 +51,30 @@ const resetBtn = document.getElementById('resetBtn');
 modeSelect.addEventListener('change', ()=> { gameMode = modeSelect.value; updateDisplay(); });
 resetBtn.addEventListener('click', initGame);
 
-// Simple deterministic seed from date
 function seed(dateStr){
   let hash = 0;
   for(let i=0;i<dateStr.length;i++) hash = (hash*31 + dateStr.charCodeAt(i)) & 0xffffffff;
   return hash;
 }
 
-// Simple PRNG using seed
 function randomSeeded(seed) {
   let x = Math.sin(seed++)*10000;
   return x - Math.floor(x);
 }
 
-// Generate a guaranteed solvable board
+// Generate guaranteed solvable board with difficulty scaling
 function generateBoard() {
   const today = new Date();
   const seedVal = seed(today.toISOString().slice(0,10));
-  
-  // 1. Generate solvable path (snake through grid)
+  const day = today.getDay(); // 0=Sunday,6=Saturday
+  const difficulty = day + 1;
+
+  // Adjust difficulty parameters
+  const numSegments = 2 + difficulty;  // more segments → harder
+  const numColors = Math.min(colors.length, 3 + Math.floor(difficulty/2));
+  if(difficulty >= 6) N = 6; else N = 5;
+
+  // Generate snake-like path
   path = [];
   for(let r=0;r<N;r++){
     if(r%2===0){
@@ -79,10 +84,9 @@ function generateBoard() {
     }
   }
 
-  // Shuffle colors deterministically for segments
-  const numSegments = Math.floor(3 + randomSeeded(seedVal)*3); // 3-5 segments
   parColorChanges = numSegments-1;
 
+  // Split path into segments
   const segmentLengths = [];
   let baseLen = Math.floor(path.length / numSegments);
   let remainder = path.length % numSegments;
@@ -91,19 +95,17 @@ function generateBoard() {
     remainder--;
   }
 
-  // Assign colors to segments
+  // Assign colors deterministically from seed
   let boardColors = [];
   let segIndex = 0;
-  let colorIndex = Math.floor(randomSeeded(seedVal)*colors.length);
-  let usedColors = [];
+  let colorIndex = Math.floor(randomSeeded(seedVal)*numColors);
   let countInSegment = 0;
   for(let i=0;i<path.length;i++){
     if(countInSegment===segmentLengths[segIndex]){
       segIndex++;
       countInSegment=0;
-      // pick next color different from previous
       let newColor;
-      do { newColor = Math.floor(randomSeeded(seedVal+i)*colors.length); } while(newColor===colorIndex);
+      do { newColor = Math.floor(randomSeeded(seedVal+i)*numColors); } while(newColor===colorIndex);
       colorIndex=newColor;
     }
     boardColors.push(colorIndex);
@@ -151,7 +153,7 @@ function drawBoard(){
 function handleTileClick(e){
   const r = parseInt(e.target.dataset.r);
   const c = parseInt(e.target.dataset.c);
-  if(path.length===0) return; // safety
+  if(path.length===0) return;
   if(visited.size===0){
     pathStart({r,c});
     return;
