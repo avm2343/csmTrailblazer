@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Trailblazer Daily Puzzle (Scaled Difficulty)</title>
+<title>Trailblazer Daily Puzzle (Scaled Difficulty + Solution Reveal)</title>
 <style>
   body { font-family: sans-serif; display: flex; flex-direction: column; align-items: center; margin: 20px; }
   #modeSelect { margin-bottom: 10px; }
@@ -121,13 +121,16 @@ function generateBoard() {
 }
 
 function initGame() {
-  generateBoard();
   visited = new Set();
   colorChanges = 0;
   timer = 0;
   activeColor = null;
   clearInterval(intervalId);
   intervalId = null;
+  // Remove old Show Solution button if exists
+  const oldBtn = document.getElementById('showSolutionBtn');
+  if(oldBtn) oldBtn.remove();
+  generateBoard();
   drawBoard();
   updateDisplay();
 }
@@ -211,11 +214,34 @@ function startTimerIfNeeded(){
 function checkCompletion(){
   if(visited.size===N*N){
     clearInterval(intervalId);
-    alert(`🎉 Daily Trailblazer Complete!
+
+    // Create "Show Solution" button
+    let showBtn = document.createElement('button');
+    showBtn.innerText = 'Show Solution';
+    showBtn.style.marginTop = '10px';
+    showBtn.id = 'showSolutionBtn';
+    document.body.appendChild(showBtn);
+
+    showBtn.addEventListener('click', ()=>{
+      revealSolution();
+      showBtn.disabled = true;
+    });
+
+    alert(`🎉 Puzzle Complete! 
 Color Changes: ${colorChanges}
-Time: ${timer.toFixed(1)}s
-Par Color Changes: ${parColorChanges}`);
+Time: ${timer.toFixed(1)}s`);
   }
+}
+
+function revealSolution(){
+  path.forEach((cell,i)=>{
+    setTimeout(()=>{
+      const tile = document.querySelector(`.tile[data-r='${cell.r}'][data-c='${cell.c}']`);
+      tile.style.border = '3px solid gold';
+      tile.style.transition = '0.3s';
+    }, i*50);
+  });
+  alert(`Minimal color changes needed: ${parColorChanges}`);
 }
 
 initGame();
