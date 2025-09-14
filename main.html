@@ -3,49 +3,32 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Trailblazer — Daily (Par-only win, time score)</title>
+<title>Trailblazer — Daily</title>
 <style>
-  :root{
-    --tile:60px;
-  }
+  :root{ --tile:60px; }
   body {
-    font-family: Inter, system-ui, -apple-system, "Segoe UI", Roboto, "Helvetica Neue", Arial;
-    display:flex;
-    flex-direction:column;
-    align-items:center;
-    gap:10px;
-    padding:20px;
-    background:#f3f4f6;
-    color:#111827;
+    font-family: Inter, system-ui, sans-serif;
+    display:flex; flex-direction:column; align-items:center;
+    gap:10px; padding:20px; background:#f3f4f6; color:#111827;
   }
   h1{font-size:18px;margin:0}
   #meta { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-  #modeSelect { display:flex; gap:8px; align-items:center; }
   #info { font-size:14px; color:#374151; }
-  #boardContainer { position:relative; background:#000; padding:0; }
-  #board { display:grid; gap:0; position:relative; }
+  #boardContainer { position:relative; background:#000; }
+  #board { display:grid; gap:0; }
   .tile {
-    width:var(--tile);
-    height:var(--tile);
-    box-sizing:border-box;
-    border-radius:6px; /* slightly rounded */
-    transition: transform .12s ease;
-    will-change: transform;
+    width:var(--tile); height:var(--tile);
+    border-radius:6px; transition: transform .12s ease;
   }
   .tile:hover { transform: scale(1.04); }
   #pathCanvas { position:absolute; left:0; top:0; z-index:2; pointer-events:none; }
-  #overlay { position:absolute; left:0; top:0; z-index:3; pointer-events:none; }
   #status { font-size:15px; margin-top:6px; }
   button {
-    padding:8px 12px;
-    background:#0f172a;
-    color:white;
-    border:none;
-    border-radius:8px;
-    cursor:pointer;
+    padding:8px 12px; background:#0f172a; color:white;
+    border:none; border-radius:8px; cursor:pointer;
   }
   button:disabled{opacity:.5; cursor:default}
-  .note { font-size:13px; color:#6b7280; }
+  .note { font-size:13px; color:#6b7280; max-width:400px; text-align:center; }
   #share { margin-left:8px; background:#0369a1; }
 </style>
 </head>
@@ -53,20 +36,14 @@
   <h1>Trailblazer — Daily</h1>
 
   <div id="meta">
-    <div id="modeSelect">
-      Mode:
-      <select id="mode">
-        <option value="time">Timed (score = time)</option>
-      </select>
-    </div>
-
     <div id="info">
       Par (minimal color changes): <strong id="parDisplay">–</strong>
-      &nbsp;•&nbsp; You must solve using **exactly** this par to win.
     </div>
   </div>
 
-  <div id="status">Color changes used: <span id="cc">0</span> • Time: <span id="t">0.0</span>s</div>
+  <div id="status">
+    Color changes: <span id="cc">0</span> • Time: <span id="t">0.0</span>s
+  </div>
 
   <div id="boardContainer">
     <div id="board"></div>
@@ -76,433 +53,134 @@
   <div style="display:flex;gap:8px;align-items:center;">
     <button id="restart">Restart</button>
     <button id="showSolution" style="display:none">Show Solution</button>
-    <button id="share" style="display:none">Share Result</button>
+    <button id="share" style="display:none">Share</button>
   </div>
 
-  <div class="note">Requirement: only exact minimal-color solutions count as a win. If you cover all tiles but used more color changes than par, you'll NOT win — the solution button will appear so you can study the optimal path.</div>
+  <div class="note">
+    You must match the minimal color changes (Par) to win.  
+    Restart clears your attempt but timer keeps running.  
+    Once solved, the day’s puzzle is locked.
+  </div>
 
 <script>
-/* -------------------------
-  CONFIG / TUNING
-   - tileSize: px
-   - difficulty tuning per day (makes puzzles very challenging daily)
-   - noiseRatio: fraction of off-path tiles to recolor to distract
--------------------------*/
-const tileSize = 64; // set CSS variable too (we used 60 earlier; set 64 for clearer look)
-document.documentElement.style.setProperty('--tile', tileSize + 'px');
+/* --- configuration --- */
+const baseColors=["#ef4444","#f97316","#facc15","#10b981","#06b6d4","#3b82f6","#7c3aed","#ec4899"];
+const tileSize=60;document.documentElement.style.setProperty('--tile',tileSize+'px');
 
-const baseColors = [
-  "#ef4444","#f97316","#facc15","#10b981","#06b6d4","#3b82f6","#7c3aed","#ec4899","#111827"
-]; // many colors for harder puzzles
+/* state */
+let N=6,board=[],visited=new Set(),playerPath=[],parColorChanges=0;
+let colorChangesUsed=0,activeColor=null,timeSeconds=0,isTiming=false,timerId=null;
+let lastCell=null,solutionData=null,gameOver=false;
 
-/* ---------- State ---------- */
-let N = 6; // will be set from difficulty
-let board = [];
-let visited = new Set();
-let playerPath = []; // ordered cells visited by player
-let parColorChanges = 0;
-let colorChangesUsed = 0;
-let isTiming = false;
-let timeSeconds = 0;
-let timerId = null;
-let activeColor = null;
-let solutionButtonCreated = false;
-let pathCanvas, ctx;
-let boardDiv, boardContainer;
-let showSolutionBtn, restartBtn, shareBtn;
+/* DOM */
+const boardDiv=document.getElementById("board");
+const pathCanvas=document.getElementById("pathCanvas");
+const ctx=pathCanvas.getContext("2d");
+const restartBtn=document.getElementById("restart");
+const showSolutionBtn=document.getElementById("showSolution");
+const shareBtn=document.getElementById("share");
 
-/* ---------- Utils ---------- */
-function seed(str){
-  let h = 2166136261 >>> 0;
-  for(let i=0;i<str.length;i++){
-    h = Math.imul(h ^ str.charCodeAt(i), 16777619) >>> 0;
-  }
-  return h;
-}
-function rndFloat(s){
-  // simple deterministic pseudo-rand from integer seed
-  return Math.abs(Math.sin(s) * 10000) % 1;
-}
-function ipair(r,c){ return {r,c}; }
-function coordKey(c){ return `${c.r}_${c.c}`; }
-function isAdjacent(a,b){ const dr=Math.abs(a.r-b.r); const dc=Math.abs(a.c-b.c); return (dr+dc===1); }
+restartBtn.addEventListener("click",restartAttempt);
+showSolutionBtn.addEventListener("click",revealSolution);
+shareBtn.addEventListener("click",shareResult);
 
-/* ---------- Difficulty mapping & generator ---------- */
-function getDifficultyParams(){
-  const today = new Date();
-  const day = today.getDay(); // 0 Sun .. 6 Sat
-  const difficulty = day + 1; // 1..7
-  // Make puzzles hard every day — tuned to encourage 60s+ solves:
-  // - Base grid 6x6, saturday 7x7 for extra
-  const Nsize = (difficulty >= 7 ? 7 : 6);
-  // number of segments (par) sizable: 6 + difficulty .. creates many color changes
-  const numSegments = 6 + difficulty; // e.g. 7..13
-  // number of colors to use (more colors = trickier)
-  const numColors = Math.min(baseColors.length, 4 + Math.ceil(difficulty/1.5)); // 5..8
-  // noise tiles ratio: more on harder days
-  const noiseRatio = Math.min(0.20 + difficulty*0.05, 0.45); // ~0.25..0.45
-  return {Nsize, numSegments, numColors, noiseRatio};
-}
+/* helpers */
+function ipair(r,c){return{r,c};}
+function coordKey(c){return`${c.r}_${c.c}`;}
+function isAdjacent(a,b){return Math.abs(a.r-b.r)+Math.abs(a.c-b.c)===1;}
 
-/* Guarantee solvability: create Hamiltonian-like path then color segments,
-   then place tiles accordingly. Add noise recolors off the path to increase difficulty. */
-function generateDailyBoard(){
-  const today = new Date();
-  const seedVal = seed(today.toISOString().slice(0,10));
-  const {Nsize, numSegments, numColors, noiseRatio} = getDifficultyParams();
-  N = Nsize;
-
-  // build a snake-ish Hamiltonian path that covers grid (deterministic)
-  let path = [];
+/* generate daily Hamiltonian snake path */
+function generateBoard(){
+  const today=new Date();
+  const weekday=today.getDay(); // 0 = Sunday
+  const path=[];
   for(let r=0;r<N;r++){
-    if(r % 2 === 0){
-      for(let c=0;c<N;c++) path.push(ipair(r,c));
-    } else {
-      for(let c=N-1;c>=0;c--) path.push(ipair(r,c));
+    if(r%2===0){for(let c=0;c<N;c++)path.push(ipair(r,c));}
+    else{for(let c=N-1;c>=0;c--)path.push(ipair(r,c));}
+  }
+  // difficulty scaling: easy=3 segments, hard=10
+  const segs=Math.min(3+weekday,10);
+  parColorChanges=segs-1;
+  let segLen=Math.floor(path.length/segs);
+  board=Array(N).fill(0).map(()=>Array(N).fill(0));
+  let color=0,idx=0;
+  for(let sIdx=0;sIdx<segs;sIdx++){
+    for(let k=0;k<segLen && idx<path.length;k++,idx++){
+      let {r,c}=path[idx];board[r][c]=color;
     }
+    color=(color+1)%baseColors.length;
   }
-  // Slightly permute path deterministic to add twist on harder days:
-  // For indices where seedVal + i mod 7 == 0, swap next pair (keeps Hamiltonian)
-  for(let i=0;i<path.length-2;i++){
-    if(((seedVal + i) % 7) === 0){
-      // swap path[i+1] & path[i+2] (still keeps adjacency mostly)
-      const tmp = path[i+1];
-      path[i+1] = path[i+2];
-      path[i+2] = tmp;
-    }
-  }
-
-  // assign segments
-  const segCount = Math.max(3, Math.min(numSegments, Math.floor(path.length/2)));
-  parColorChanges = segCount - 1;
-
-  // split path into segments as evenly as possible
-  const segLens = [];
-  let baseLen = Math.floor(path.length / segCount);
-  let rem = path.length % segCount;
-  for(let i=0;i<segCount;i++){
-    segLens.push(baseLen + (rem>0 ? 1 : 0));
-    rem--;
-  }
-
-  // assign colors for segments deterministically
-  let boardColorsFlat = new Array(path.length);
-  let segIdx = 0, countInSeg = 0;
-  let colorIdx = Math.floor(rndFloat(seedVal) * numColors);
-  for(let i=0;i<path.length;i++){
-    if(countInSeg === segLens[segIdx]){
-      segIdx++; countInSeg = 0;
-      // pick next color (deterministic but different from previous)
-      let newC;
-      let attempts = 0;
-      do {
-        newC = Math.floor(rndFloat(seedVal + i + attempts) * numColors);
-        attempts++;
-      } while(newC === colorIdx && attempts < 10);
-      colorIdx = newC;
-    }
-    boardColorsFlat[i] = colorIdx;
-    countInSeg++;
-  }
-
-  // create board and paint according to the path
-  board = Array(N).fill(0).map(()=>Array(N).fill(0));
-  for(let i=0;i<path.length;i++){
-    const {r,c} = path[i];
-    board[r][c] = boardColorsFlat[i];
-  }
-
-  // add "noise" recolors on some off-path cells to create distractions
-  // pick a set of positions not on the path index positions (but path covers all cells)
-  // So instead, we will recolor some cells to a different color than their intended
-  // while ensuring the solution path is unchanged.
-  const noiseCount = Math.floor(N*N * noiseRatio);
-  let attempts = 0;
-  for(let k=0;k<noiseCount && attempts < N*N*5; attempts++){
-    // pick a random cell
-    const i = Math.floor(rndFloat(seedVal + 1000 + attempts) * path.length);
-    const cell = path[i];
-    // recolor this cell to a different color (but keep original color somewhere else)
-    const original = board[cell.r][cell.c];
-    let alt = Math.floor(rndFloat(seedVal + 2000 + attempts) * numColors);
-    if(alt === original) continue;
-    board[cell.r][cell.c] = alt;
-    // We must ensure the intended solution path still works: To keep the solution valid,
-    // we will *not* change the color mapping used for par calculation — the solver's
-    // path is still the original path; to solve with minimal color changes, the player
-    // must *follow the original path and change at the original segment boundaries*.
-    // Recoloring tiles makes it visually distracting but does not change the par
-    // because par is computed from the segments assigned earlier.
-    // (This means the tile's color displayed may differ from the ideal segment color;
-    //  the player's activeColor logic uses the displayed color — so to keep solvability,
-    //  we must ensure the displayed tile colors along the path still allow the intended
-    //  sequence of activeColor switches. To guarantee that, recolor only tiles that
-    //  are NOT at segment boundary positions — simpler: only recolor tiles inside segments.)
-    // For safety, recolor only if it's not at a segment boundary:
-    const idxInPath = i;
-    // compute cumulative segment boundaries:
-    // (we already have segLens)
-    // we re-evaluate: if idxInPath is at a boundary (first element of a segment except 0),
-    // skip recolor
-    let sum=0, isBoundary=false;
-    for(let s=0;s<segLens.length;s++){
-      sum += segLens[s];
-      if(idxInPath === sum - segLens[s]) { isBoundary = (s !== 0); break; }
-    }
-    if(isBoundary) continue;
-    // apply recolor (we already did), count it
-    k++;
-  }
-
-  // store original solution path (with ideal colors per segment) so we can reveal later
-  const solution = { path: path.slice(), segmentColors: boardColorsFlat.slice(), segLens: segLens.slice(), numColors };
-
-  return solution;
+  while(idx<path.length){let {r,c}=path[idx++];board[r][c]=color;}
+  solutionData={path,par:parColorChanges};
 }
 
-/* ---------- Rendering & input ---------- */
-
-function initDOM(){
-  boardDiv = document.getElementById('board');
-  boardContainer = document.getElementById('boardContainer');
-  pathCanvas = document.getElementById('pathCanvas');
-  ctx = pathCanvas.getContext('2d');
-  restartBtn = document.getElementById('restart');
-  showSolutionBtn = document.getElementById('showSolution');
-  shareBtn = document.getElementById('share');
-
-  restartBtn.addEventListener('click', ()=> startNewGame(true));
-  showSolutionBtn.addEventListener('click', ()=>{
-    revealSolution();
-    showSolutionBtn.disabled = true;
-  });
-  shareBtn.addEventListener('click', shareResult);
-}
-
-let solutionData = null;
-
-function startNewGame(restart=false){
-  stopTimer();
-  visited.clear();
-  playerPath = [];
-  colorChangesUsed = 0;
-  activeColor = null;
-  isTiming = false;
-  timeSeconds = 0;
-  solutionButtonCreated = false;
-  showSolutionBtn.style.display = 'none';
-  shareBtn.style.display = 'none';
-  document.getElementById('cc').textContent = '0';
-  document.getElementById('t').textContent = '0.0';
-  // generate board & solution
-  solutionData = generateDailyBoard();
-  // compute par from solutionData
-  parColorChanges = solutionData.segLens.length - 1;
-  document.getElementById('parDisplay').textContent = parColorChanges;
-  renderBoard();
-  clearCanvas();
-  drawPath(); // empty
-}
-
-/* create tiles and event handlers */
 function renderBoard(){
-  boardDiv.style.gridTemplateColumns = `repeat(${N}, ${tileSize}px)`;
-  boardDiv.style.width = `${N*tileSize}px`;
-  boardDiv.style.height = `${N*tileSize}px`;
-  // canvas size
-  pathCanvas.width = N * tileSize;
-  pathCanvas.height = N * tileSize;
-  // clear board
-  boardDiv.innerHTML = '';
-  for(let r=0;r<N;r++){
-    for(let c=0;c<N;c++){
-      const cell = document.createElement('div');
-      cell.className = 'tile';
-      cell.style.background = baseColors[ board[r][c] % baseColors.length ];
-      cell.dataset.r = r; cell.dataset.c = c;
-      cell.addEventListener('pointerdown', handlePointerDown);
-      cell.addEventListener('pointerover', handlePointerOver);
-      boardDiv.appendChild(cell);
-    }
-  }
+  boardDiv.style.gridTemplateColumns=`repeat(${N},${tileSize}px)`;
+  boardDiv.style.width=`${N*tileSize}px`;boardDiv.style.height=`${N*tileSize}px`;
+  pathCanvas.width=N*tileSize;pathCanvas.height=N*tileSize;
+  boardDiv.innerHTML='';
+  for(let r=0;r<N;r++){for(let c=0;c<N;c++){const el=document.createElement("div");
+    el.className="tile";el.style.background=baseColors[board[r][c]];
+    el.dataset.r=r;el.dataset.c=c;
+    el.addEventListener("pointerdown",tileClick);
+    el.addEventListener("pointerover",tileHover);
+    boardDiv.appendChild(el);}}
 }
 
-/* input handlers */
-function handlePointerDown(e){
-  const r = parseInt(e.currentTarget.dataset.r,10);
-  const c = parseInt(e.currentTarget.dataset.c,10);
-  const cell = {r,c};
-  if(playerPath.length === 0){
-    startPath(cell);
-  } else {
-    tryExtend(cell);
-  }
-}
-function handlePointerOver(e){
-  if(e.buttons !== 1) return;
-  const r = parseInt(e.currentTarget.dataset.r,10);
-  const c = parseInt(e.currentTarget.dataset.c,10);
-  const cell = {r,c};
-  if(playerPath.length === 0) return;
-  tryExtend(cell);
-}
-
-function startPath(cell){
-  playerPath.push(cell);
-  visited.add(coordKey(cell));
-  activeColor = getDisplayedColor(cell); // color value index
-  lastCell = cell;
-  startTimer();
-  drawPath();
-  updateStatus();
-}
-
-function tryExtend(cell){
-  if(!lastCell) return;
-  if(!isAdjacent(lastCell, cell)) return;
-  if(visited.has(coordKey(cell))) return;
-  // handle color change if displayed color differs from activeColor
-  const displayed = getDisplayedColor(cell);
-  if(displayed !== activeColor){
-    colorChangesUsed++;
-    activeColor = displayed;
-  }
-  // add to path
-  playerPath.push(cell);
-  visited.add(coordKey(cell));
-  lastCell = cell;
-  drawPath();
-  updateStatus();
-  maybeComplete();
-}
-
-/* displayed color index (board[r][c]) */
-function getDisplayedColor(cell){
-  return board[cell.r][cell.c];
-}
-
-function updateStatus(){
-  document.getElementById('cc').textContent = colorChangesUsed;
-  document.getElementById('t').textContent = timeSeconds.toFixed(1);
-}
-
-/* canvas drawing */
-function clearCanvas(){
-  ctx.clearRect(0,0,pathCanvas.width, pathCanvas.height);
-}
-function drawPath(highlight=false){
-  clearCanvas();
-  if(playerPath.length < 1) return;
-  ctx.lineWidth = 8;
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = 'white';
-  ctx.beginPath();
-  for(let i=0;i<playerPath.length;i++){
-    const {r,c} = playerPath[i];
-    const x = c*tileSize + tileSize/2;
-    const y = r*tileSize + tileSize/2;
-    if(i===0) ctx.moveTo(x,y);
-    else ctx.lineTo(x,y);
-  }
-  ctx.stroke();
-  // optionally, draw a faint glow or dot at last
-  if(playerPath.length>0){
-    const last = playerPath[playerPath.length-1];
-    ctx.beginPath();
-    ctx.fillStyle = 'rgba(255,255,255,0.9)';
-    ctx.arc(last.c*tileSize + tileSize/2, last.r*tileSize + tileSize/2, 4, 0, Math.PI*2);
-    ctx.fill();
-  }
-}
+function startGame(){generateBoard();renderBoard();
+  visited.clear();playerPath=[];colorChangesUsed=0;activeColor=null;lastCell=null;timeSeconds=0;gameOver=false;
+  document.getElementById("cc").textContent="0";document.getElementById("t").textContent="0.0";
+  document.getElementById("parDisplay").textContent=parColorChanges;drawPath();}
 
 /* timer */
-function startTimer(){
-  if(isTiming) return;
-  isTiming = true;
-  timerId = setInterval(()=>{
-    timeSeconds += 0.1;
-    updateStatus();
-  },100);
-}
-function stopTimer(){
-  if(timerId) clearInterval(timerId);
-  timerId = null;
-  isTiming = false;
-}
+function startTimer(){if(isTiming)return;isTiming=true;timerId=setInterval(()=>{timeSeconds+=0.1;document.getElementById("t").textContent=timeSeconds.toFixed(1);},100);}
+function stopTimer(){if(timerId)clearInterval(timerId);timerId=null;isTiming=false;}
 
-/* completion logic: only success if visited all cells AND colorChangesUsed === parColorChanges */
-function maybeComplete(){
-  if(visited.size === N*N){
-    stopTimer();
-    // show a message about color-change requirement
-    if(colorChangesUsed === parColorChanges){
-      // WIN: time-based score
-      const t = timeSeconds.toFixed(1);
-      setTimeout(()=> {
-        alert(`🎉 PERFECT — You solved using the minimal ${parColorChanges} color changes!\nTime: ${t}s\nThis is your score for today.`);
-        shareBtn.style.display = 'inline-block';
-      }, 100);
-    } else {
-      // not winning: show that they completed but used incorrect # of color changes
-      setTimeout(()=> {
-        alert(`You covered all tiles but used ${colorChangesUsed} color changes — the minimal required is ${parColorChanges}. You must match the par to register a win.\nYou can click "Show Solution" to reveal the optimal path.`);
-        if(!solutionButtonCreated){
-          showSolutionBtn.style.display = 'inline-block';
-          solutionButtonCreated = true;
-        }
-      }, 100);
+/* path handling */
+function tileClick(e){if(gameOver)return;
+  const r=parseInt(e.currentTarget.dataset.r),c=parseInt(e.currentTarget.dataset.c);const cell={r,c};
+  if(playerPath.length===0){playerPath.push(cell);visited.add(coordKey(cell));activeColor=board[r][c];lastCell=cell;startTimer();drawPath();}
+  else tryExtend(cell);
+}
+function tileHover(e){if(e.buttons!==1||gameOver)return;
+  const r=parseInt(e.currentTarget.dataset.r),c=parseInt(e.currentTarget.dataset.c);tryExtend({r,c});}
+function tryExtend(cell){
+  if(!isAdjacent(lastCell,cell)||visited.has(coordKey(cell)))return;
+  const color=board[cell.r][cell.c];if(color!==activeColor){colorChangesUsed++;activeColor=color;}
+  playerPath.push(cell);visited.add(coordKey(cell));lastCell=cell;drawPath();
+  document.getElementById("cc").textContent=colorChangesUsed;checkComplete();}
+function drawPath(){ctx.clearRect(0,0,pathCanvas.width,pathCanvas.height);
+  if(playerPath.length<1)return;ctx.lineWidth=6;ctx.strokeStyle="white";ctx.lineCap="round";ctx.beginPath();
+  playerPath.forEach((p,i)=>{let x=p.c*tileSize+tileSize/2,y=p.r*tileSize+tileSize/2;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();}
+
+/* check win */
+function checkComplete(){
+  if(visited.size===N*N){
+    stopTimer();gameOver=true;restartBtn.disabled=true;
+    if(colorChangesUsed===parColorChanges){
+      alert(`🎉 Perfect! Solved in ${timeSeconds.toFixed(1)}s with exactly ${parColorChanges} changes.`);
+      shareBtn.style.display="inline-block";
+    }else{
+      alert(`All tiles covered, but you used ${colorChangesUsed}. Par is ${parColorChanges}.`);
+      showSolutionBtn.style.display="inline-block";
     }
-    // ensure final path drawn
-    drawPath();
   }
 }
 
-/* reveal solution (draw the ideal path on canvas independent of player's path) */
+/* restart attempt: clears path but timer continues */
+function restartAttempt(){if(gameOver)return;
+  visited.clear();playerPath=[];colorChangesUsed=0;activeColor=null;lastCell=null;
+  document.getElementById("cc").textContent="0";drawPath();}
+
+/* reveal solution */
 function revealSolution(){
-  clearCanvas();
-  const sol = solutionData.path || solutionData.path;
-  // draw with animation: white line along solution.path
-  ctx.lineWidth = 8;
-  ctx.lineCap = 'round';
-  ctx.strokeStyle = '#ffd54f'; // gold-ish for reveal
-  let i=0;
-  function step(){
-    if(i===0){ ctx.beginPath(); }
-    if(i < solutionData.path.length){
-      const p = solutionData.path[i];
-      const x = p.c*tileSize + tileSize/2;
-      const y = p.r*tileSize + tileSize/2;
-      if(i===0) ctx.moveTo(x,y);
-      else ctx.lineTo(x,y);
-      ctx.stroke();
-      i++;
-      requestAnimationFrame(step);
-    } else {
-      // after drawing solution, show minimal color changes alert
-      setTimeout(()=> alert(`Minimal color changes needed: ${parColorChanges}`), 80);
-    }
-  }
-  step();
-}
+  ctx.clearRect(0,0,pathCanvas.width,pathCanvas.height);ctx.lineWidth=6;ctx.strokeStyle="#fbbf24";ctx.beginPath();
+  solutionData.path.forEach((p,i)=>{let x=p.c*tileSize+tileSize/2,y=p.r*tileSize+tileSize/2;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
+  ctx.stroke();alert(`Minimal color changes: ${solutionData.par}`);}
 
-/* share result (small text message) */
-function shareResult(){
-  const t = timeSeconds.toFixed(1);
-  const text = `Trailblazer — Par ${parColorChanges} ✓ — Time ${t}s — #TrailblazerDaily`;
-  navigator.clipboard?.writeText(text).then(()=> {
-    alert('Result copied to clipboard. Paste to share.');
-  }, ()=> {
-    alert(text);
-  });
-}
-
-/* init */
-function init(){
-  initDOM();
-  startNewGame();
-}
-
-init();
+/* share */
+function shareResult(){const msg=`Trailblazer — Par ${parColorChanges} ✓ — Time ${timeSeconds.toFixed(1)}s`;navigator.clipboard.writeText(msg).then(()=>alert("Copied to clipboard!"));}
+startGame();
 </script>
 </body>
 </html>
