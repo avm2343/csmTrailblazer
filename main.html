@@ -1,44 +1,51 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8" />
-<meta name="viewport" content="width=device-width,initial-scale=1" />
-<title>Trailblazer — Daily</title>
+<meta charset="utf-8"/>
+<meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Trailblazer — Daily Puzzle</title>
 <style>
   :root{ --tile:60px; }
   body {
     font-family: Inter, system-ui, sans-serif;
     display:flex; flex-direction:column; align-items:center;
-    gap:10px; padding:20px; background:#f3f4f6; color:#111827;
+    gap:10px; padding:20px; background:#111; color:#f9fafb;
   }
-  h1{font-size:18px;margin:0}
-  #meta { display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
-  #info { font-size:14px; color:#374151; }
+  h1{font-size:20px;margin:0}
+  #meta { font-size:15px; margin-bottom:6px; }
   #boardContainer { position:relative; background:#000; }
   #board { display:grid; gap:0; }
   .tile {
     width:var(--tile); height:var(--tile);
-    border-radius:6px; transition: transform .12s ease;
+    border-radius:4px;
   }
-  .tile:hover { transform: scale(1.04); }
   #pathCanvas { position:absolute; left:0; top:0; z-index:2; pointer-events:none; }
   #status { font-size:15px; margin-top:6px; }
   button {
-    padding:8px 12px; background:#0f172a; color:white;
-    border:none; border-radius:8px; cursor:pointer;
+    padding:8px 12px; background:#2563eb; color:white;
+    border:none; border-radius:6px; cursor:pointer;
   }
   button:disabled{opacity:.5; cursor:default}
-  .note { font-size:13px; color:#6b7280; max-width:400px; text-align:center; }
-  #share { margin-left:8px; background:#0369a1; }
+  #showSolution { background:#f59e0b; }
+  #share { background:#10b981; }
+  /* Modal */
+  .modal {
+    position:fixed; top:0; left:0; right:0; bottom:0;
+    background:rgba(0,0,0,0.7); display:flex; align-items:center; justify-content:center;
+    z-index:100;
+  }
+  .modalContent {
+    background:#1f2937; color:#f9fafb; padding:20px; border-radius:8px;
+    max-width:400px; text-align:left;
+  }
+  .modalContent h2 { margin-top:0; }
 </style>
 </head>
 <body>
   <h1>Trailblazer — Daily</h1>
 
   <div id="meta">
-    <div id="info">
-      Par (minimal color changes): <strong id="parDisplay">–</strong>
-    </div>
+    Par (minimal color changes): <strong id="parDisplay">–</strong>
   </div>
 
   <div id="status">
@@ -50,16 +57,24 @@
     <canvas id="pathCanvas"></canvas>
   </div>
 
-  <div style="display:flex;gap:8px;align-items:center;">
+  <div style="display:flex;gap:8px;align-items:center;margin-top:10px;">
     <button id="restart">Restart</button>
     <button id="showSolution" style="display:none">Show Solution</button>
     <button id="share" style="display:none">Share</button>
+    <button id="instructionsBtn">Instructions</button>
   </div>
 
-  <div class="note">
-    You must match the minimal color changes (Par) to win.  
-    Restart clears your attempt but timer keeps running.  
-    Once solved, the day’s puzzle is locked.
+  <!-- Modal -->
+  <div class="modal" id="instructionsModal" style="display:none">
+    <div class="modalContent">
+      <h2>How to Play</h2>
+      <p>• The board is filled with colored squares.</p>
+      <p>• Your goal: draw a path that covers every square while making exactly the minimal number of color changes (Par).</p>
+      <p>• Score is based only on how fast you solve it.</p>
+      <p>• Restart clears your path but the timer keeps running.</p>
+      <p>• Once solved, today’s puzzle is locked.</p>
+      <button onclick="closeInstructions()">Got it!</button>
+    </div>
   </div>
 
 <script>
@@ -79,26 +94,29 @@ const ctx=pathCanvas.getContext("2d");
 const restartBtn=document.getElementById("restart");
 const showSolutionBtn=document.getElementById("showSolution");
 const shareBtn=document.getElementById("share");
+const parDisplay=document.getElementById("parDisplay");
 
 restartBtn.addEventListener("click",restartAttempt);
 showSolutionBtn.addEventListener("click",revealSolution);
 shareBtn.addEventListener("click",shareResult);
+document.getElementById("instructionsBtn").addEventListener("click",()=>{document.getElementById("instructionsModal").style.display="flex";});
+
+/* Instructions modal */
+function closeInstructions(){document.getElementById("instructionsModal").style.display="none";}
 
 /* helpers */
-function ipair(r,c){return{r,c};}
 function coordKey(c){return`${c.r}_${c.c}`;}
 function isAdjacent(a,b){return Math.abs(a.r-b.r)+Math.abs(a.c-b.c)===1;}
 
-/* generate daily Hamiltonian snake path */
+/* generate daily snake path */
 function generateBoard(){
   const today=new Date();
   const weekday=today.getDay(); // 0 = Sunday
   const path=[];
   for(let r=0;r<N;r++){
-    if(r%2===0){for(let c=0;c<N;c++)path.push(ipair(r,c));}
-    else{for(let c=N-1;c>=0;c--)path.push(ipair(r,c));}
+    if(r%2===0){for(let c=0;c<N;c++)path.push({r,c});}
+    else{for(let c=N-1;c>=0;c--)path.push({r,c});}
   }
-  // difficulty scaling: easy=3 segments, hard=10
   const segs=Math.min(3+weekday,10);
   parColorChanges=segs-1;
   let segLen=Math.floor(path.length/segs);
@@ -130,7 +148,7 @@ function renderBoard(){
 function startGame(){generateBoard();renderBoard();
   visited.clear();playerPath=[];colorChangesUsed=0;activeColor=null;lastCell=null;timeSeconds=0;gameOver=false;
   document.getElementById("cc").textContent="0";document.getElementById("t").textContent="0.0";
-  document.getElementById("parDisplay").textContent=parColorChanges;drawPath();}
+  parDisplay.textContent=parColorChanges;drawPath();}
 
 /* timer */
 function startTimer(){if(isTiming)return;isTiming=true;timerId=setInterval(()=>{timeSeconds+=0.1;document.getElementById("t").textContent=timeSeconds.toFixed(1);},100);}
@@ -180,7 +198,7 @@ function revealSolution(){
 
 /* share */
 function shareResult(){const msg=`Trailblazer — Par ${parColorChanges} ✓ — Time ${timeSeconds.toFixed(1)}s`;navigator.clipboard.writeText(msg).then(()=>alert("Copied to clipboard!"));}
-startGame();
+startGame();closeInstructions(); // close auto if we want, or leave open
 </script>
 </body>
 </html>
