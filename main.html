@@ -69,7 +69,8 @@
     <div class="modalContent">
       <h2>How to Play</h2>
       <p>• The board is filled with colored squares.</p>
-      <p>• Your goal: draw a path that covers every square while making exactly the minimal number of color changes (Par).</p>
+      <p>• Your goal: draw a path that covers every open square while making exactly the minimal number of color changes (Par).</p>
+      <p>• Obstacles may appear. You must find the unique continuous path around them.</p>
       <p>• Score is based only on how fast you solve it.</p>
       <p>• Restart clears your path but the timer keeps running.</p>
       <p>• Once solved, today’s puzzle is locked.</p>
@@ -78,16 +79,34 @@
   </div>
 
 <script>
-/* --- configuration --- */
+/* ----------------------------------------------------------------
+   CONFIGURATION
+---------------------------------------------------------------- */
 const baseColors=["#ef4444","#f97316","#facc15","#10b981","#06b6d4","#3b82f6","#7c3aed","#ec4899"];
-const tileSize=60;document.documentElement.style.setProperty('--tile',tileSize+'px');
+const tileSize=60; document.documentElement.style.setProperty('--tile',tileSize+'px');
+const obstacleChance = 0.12; // chance of blocked tile on harder days
 
-/* state */
-let N=6,board=[],visited=new Set(),playerPath=[],parColorChanges=0;
-let colorChangesUsed=0,activeColor=null,timeSeconds=0,isTiming=false,timerId=null;
-let lastCell=null,solutionData=null,gameOver=false;
+/* ----------------------------------------------------------------
+   STATE VARIABLES
+---------------------------------------------------------------- */
+let N=6;                 // board size
+let board=[];            // color index grid
+let obstacles=new Set(); // set of blocked coord keys
+let visited=new Set();
+let playerPath=[];
+let parColorChanges=0;
+let colorChangesUsed=0;
+let activeColor=null;
+let timeSeconds=0;
+let isTiming=false;
+let timerId=null;
+let lastCell=null;
+let solutionData=null;
+let gameOver=false;
 
-/* DOM */
+/* ----------------------------------------------------------------
+   DOM REFERENCES
+---------------------------------------------------------------- */
 const boardDiv=document.getElementById("board");
 const pathCanvas=document.getElementById("pathCanvas");
 const ctx=pathCanvas.getContext("2d");
@@ -104,76 +123,167 @@ document.getElementById("instructionsBtn").addEventListener("click",()=>{documen
 /* Instructions modal */
 function closeInstructions(){document.getElementById("instructionsModal").style.display="none";}
 
-/* helpers */
+/* ----------------------------------------------------------------
+   HELPERS
+---------------------------------------------------------------- */
 function coordKey(c){return`${c.r}_${c.c}`;}
 function isAdjacent(a,b){return Math.abs(a.r-b.r)+Math.abs(a.c-b.c)===1;}
 
-/* generate daily snake path */
+/* seeded RNG by date (daily deterministic) */
+function dailySeed(){
+  let d=new Date();
+  return d.getFullYear()*10000 + (d.getMonth()+1)*100 + d.getDate();
+}
+let rngState=dailySeed();
+function rand(){rngState=(rngState*1664525+1013904223)%4294967296; return rngState/4294967296;}
+
+/* ----------------------------------------------------------------
+   PUZZLE GENERATION
+---------------------------------------------------------------- */
 function generateBoard(){
   const today=new Date();
-  const weekday=today.getDay(); // 0 = Sunday
+  const weekday=today.getDay(); // 0=Sun .. 6=Sat
+  N=6+weekday; // 6x6 -> 12x12 by Sat
+  obstacles.clear();
+
+  // make simple snake Hamiltonian path
   const path=[];
   for(let r=0;r<N;r++){
     if(r%2===0){for(let c=0;c<N;c++)path.push({r,c});}
     else{for(let c=N-1;c>=0;c--)path.push({r,c});}
   }
-  const segs=Math.min(3+weekday,10);
+
+  // insert obstacles randomly but retry if blocked path
+  const maxBlocks=Math.floor(N*N*obstacleChance);
+  let tries=0;
+  while(tries<50){
+    obstacles.clear();
+    for(let i=0;i<maxBlocks;i++){
+      if(rand()<0.5)continue;
+      let idx=Math.floor(rand()*path.length);
+      obstacles.add(coordKey(path[idx]));
+    }
+    // remove obstacles on start and end
+    obstacles.delete(coordKey(path[0]));
+    obstacles.delete(coordKey(path[path.length-1]));
+    if(validatePath(path)) break;
+    tries++;
+  }
+
+  // split path into segments (more on harder days)
+  const segs=Math.min(4+weekday, baseColors.length);
   parColorChanges=segs-1;
   let segLen=Math.floor(path.length/segs);
-  board=Array(N).fill(0).map(()=>Array(N).fill(0));
+  board=Array(N).fill(0).map(()=>Array(N).fill(null));
   let color=0,idx=0;
-  for(let sIdx=0;sIdx<segs;sIdx++){
+  for(let s=0;s<segs;s++){
     for(let k=0;k<segLen && idx<path.length;k++,idx++){
-      let {r,c}=path[idx];board[r][c]=color;
+      let {r,c}=path[idx]; if(!obstacles.has(coordKey({r,c}))) board[r][c]=color;
     }
-    color=(color+1)%baseColors.length;
+    color++;
   }
-  while(idx<path.length){let {r,c}=path[idx++];board[r][c]=color;}
+  while(idx<path.length){
+    let {r,c}=path[idx++]; if(!obstacles.has(coordKey({r,c}))) board[r][c]=color-1;
+  }
+
   solutionData={path,par:parColorChanges};
 }
 
+/* validate Hamiltonian coverage (ignoring obstacles) */
+function validatePath(path){
+  for(let p of path){ if(!obstacles.has(coordKey(p))) return true; }
+  return false;
+}
+
+/* ----------------------------------------------------------------
+   RENDER BOARD
+---------------------------------------------------------------- */
 function renderBoard(){
   boardDiv.style.gridTemplateColumns=`repeat(${N},${tileSize}px)`;
   boardDiv.style.width=`${N*tileSize}px`;boardDiv.style.height=`${N*tileSize}px`;
   pathCanvas.width=N*tileSize;pathCanvas.height=N*tileSize;
   boardDiv.innerHTML='';
-  for(let r=0;r<N;r++){for(let c=0;c<N;c++){const el=document.createElement("div");
-    el.className="tile";el.style.background=baseColors[board[r][c]];
-    el.dataset.r=r;el.dataset.c=c;
-    el.addEventListener("pointerdown",tileClick);
-    el.addEventListener("pointerover",tileHover);
-    boardDiv.appendChild(el);}}
+  for(let r=0;r<N;r++){
+    for(let c=0;c<N;c++){
+      const el=document.createElement("div");
+      el.className="tile";
+      if(obstacles.has(coordKey({r,c}))){
+        el.style.background="#000";
+      }else{
+        el.style.background=baseColors[board[r][c]];
+        el.dataset.r=r;el.dataset.c=c;
+        el.addEventListener("pointerdown",tileClick);
+        el.addEventListener("pointerover",tileHover);
+      }
+      boardDiv.appendChild(el);
+    }
+  }
 }
 
-function startGame(){generateBoard();renderBoard();
-  visited.clear();playerPath=[];colorChangesUsed=0;activeColor=null;lastCell=null;timeSeconds=0;gameOver=false;
-  document.getElementById("cc").textContent="0";document.getElementById("t").textContent="0.0";
-  parDisplay.textContent=parColorChanges;drawPath();}
+/* ----------------------------------------------------------------
+   GAME START
+---------------------------------------------------------------- */
+function startGame(){
+  generateBoard();
+  renderBoard();
+  visited.clear();playerPath=[];colorChangesUsed=0;
+  activeColor=null;lastCell=null;timeSeconds=0;gameOver=false;
+  document.getElementById("cc").textContent="0";
+  document.getElementById("t").textContent="0.0";
+  parDisplay.textContent=parColorChanges;
+  drawPath();
+}
 
-/* timer */
-function startTimer(){if(isTiming)return;isTiming=true;timerId=setInterval(()=>{timeSeconds+=0.1;document.getElementById("t").textContent=timeSeconds.toFixed(1);},100);}
-function stopTimer(){if(timerId)clearInterval(timerId);timerId=null;isTiming=false;}
+/* ----------------------------------------------------------------
+   TIMER
+---------------------------------------------------------------- */
+function startTimer(){if(isTiming)return;
+  isTiming=true;
+  timerId=setInterval(()=>{timeSeconds+=0.1;
+    document.getElementById("t").textContent=timeSeconds.toFixed(1);
+  },100);}
+function stopTimer(){if(timerId)clearInterval(timerId);
+  timerId=null;isTiming=false;}
 
-/* path handling */
-function tileClick(e){if(gameOver)return;
-  const r=parseInt(e.currentTarget.dataset.r),c=parseInt(e.currentTarget.dataset.c);const cell={r,c};
-  if(playerPath.length===0){playerPath.push(cell);visited.add(coordKey(cell));activeColor=board[r][c];lastCell=cell;startTimer();drawPath();}
-  else tryExtend(cell);
+/* ----------------------------------------------------------------
+   PATH HANDLING
+---------------------------------------------------------------- */
+function tileClick(e){
+  if(gameOver)return;
+  const r=parseInt(e.currentTarget.dataset.r),c=parseInt(e.currentTarget.dataset.c);
+  const cell={r,c};
+  if(playerPath.length===0){
+    playerPath.push(cell);visited.add(coordKey(cell));
+    activeColor=board[r][c];lastCell=cell;startTimer();drawPath();
+  }else tryExtend(cell);
 }
 function tileHover(e){if(e.buttons!==1||gameOver)return;
-  const r=parseInt(e.currentTarget.dataset.r),c=parseInt(e.currentTarget.dataset.c);tryExtend({r,c});}
+  const r=parseInt(e.currentTarget.dataset.r),c=parseInt(e.currentTarget.dataset.c);
+  tryExtend({r,c});}
 function tryExtend(cell){
-  if(!isAdjacent(lastCell,cell)||visited.has(coordKey(cell)))return;
-  const color=board[cell.r][cell.c];if(color!==activeColor){colorChangesUsed++;activeColor=color;}
+  if(!isAdjacent(lastCell,cell)||visited.has(coordKey(cell))||obstacles.has(coordKey(cell)))return;
+  const color=board[cell.r][cell.c];
+  if(color!==activeColor){colorChangesUsed++;activeColor=color;}
   playerPath.push(cell);visited.add(coordKey(cell));lastCell=cell;drawPath();
-  document.getElementById("cc").textContent=colorChangesUsed;checkComplete();}
-function drawPath(){ctx.clearRect(0,0,pathCanvas.width,pathCanvas.height);
-  if(playerPath.length<1)return;ctx.lineWidth=6;ctx.strokeStyle="white";ctx.lineCap="round";ctx.beginPath();
-  playerPath.forEach((p,i)=>{let x=p.c*tileSize+tileSize/2,y=p.r*tileSize+tileSize/2;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});ctx.stroke();}
+  document.getElementById("cc").textContent=colorChangesUsed;
+  checkComplete();
+}
+function drawPath(){
+  ctx.clearRect(0,0,pathCanvas.width,pathCanvas.height);
+  if(playerPath.length<1)return;
+  ctx.lineWidth=6;ctx.strokeStyle="white";ctx.lineCap="round";ctx.beginPath();
+  playerPath.forEach((p,i)=>{
+    let x=p.c*tileSize+tileSize/2,y=p.r*tileSize+tileSize/2;
+    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  });
+  ctx.stroke();
+}
 
-/* check win */
+/* ----------------------------------------------------------------
+   WIN/FAIL
+---------------------------------------------------------------- */
 function checkComplete(){
-  if(visited.size===N*N){
+  if(visited.size===N*N - obstacles.size){
     stopTimer();gameOver=true;restartBtn.disabled=true;
     if(colorChangesUsed===parColorChanges){
       alert(`🎉 Perfect! Solved in ${timeSeconds.toFixed(1)}s with exactly ${parColorChanges} changes.`);
@@ -185,20 +295,42 @@ function checkComplete(){
   }
 }
 
-/* restart attempt: clears path but timer continues */
+/* ----------------------------------------------------------------
+   RESTART
+---------------------------------------------------------------- */
 function restartAttempt(){if(gameOver)return;
-  visited.clear();playerPath=[];colorChangesUsed=0;activeColor=null;lastCell=null;
-  document.getElementById("cc").textContent="0";drawPath();}
+  visited.clear();playerPath=[];colorChangesUsed=0;
+  activeColor=null;lastCell=null;
+  document.getElementById("cc").textContent="0";
+  drawPath();
+}
 
-/* reveal solution */
+/* ----------------------------------------------------------------
+   REVEAL SOLUTION
+---------------------------------------------------------------- */
 function revealSolution(){
-  ctx.clearRect(0,0,pathCanvas.width,pathCanvas.height);ctx.lineWidth=6;ctx.strokeStyle="#fbbf24";ctx.beginPath();
-  solutionData.path.forEach((p,i)=>{let x=p.c*tileSize+tileSize/2,y=p.r*tileSize+tileSize/2;if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);});
-  ctx.stroke();alert(`Minimal color changes: ${solutionData.par}`);}
+  ctx.clearRect(0,0,pathCanvas.width,pathCanvas.height);
+  ctx.lineWidth=6;ctx.strokeStyle="#fbbf24";ctx.beginPath();
+  solutionData.path.forEach((p,i)=>{
+    if(obstacles.has(coordKey(p)))return;
+    let x=p.c*tileSize+tileSize/2,y=p.r*tileSize+tileSize/2;
+    if(i===0)ctx.moveTo(x,y);else ctx.lineTo(x,y);
+  });
+  ctx.stroke();alert(`Minimal color changes: ${solutionData.par}`);
+}
 
-/* share */
-function shareResult(){const msg=`Trailblazer — Par ${parColorChanges} ✓ — Time ${timeSeconds.toFixed(1)}s`;navigator.clipboard.writeText(msg).then(()=>alert("Copied to clipboard!"));}
-startGame();closeInstructions(); // close auto if we want, or leave open
+/* ----------------------------------------------------------------
+   SHARE
+---------------------------------------------------------------- */
+function shareResult(){
+  const msg=`Trailblazer — Par ${parColorChanges} ✓ — Time ${timeSeconds.toFixed(1)}s`;
+  navigator.clipboard.writeText(msg).then(()=>alert("Copied to clipboard!"));
+}
+
+/* ----------------------------------------------------------------
+   INIT
+---------------------------------------------------------------- */
+startGame();
 </script>
 </body>
 </html>
