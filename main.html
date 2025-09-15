@@ -143,11 +143,12 @@ function assignColors(path,difficulty){
 // --- Setup game ---
 function startGame(){
   rng=mulberry32(dateSeed()+document.getElementById("difficulty").value.charCodeAt(0));
-  let day=(new Date()).getUTCDay();
-  N = 6+day; // scale Mon-Sat
+  let day = (new Date()).getUTCDay(); // Sunday=0, Saturday=6
+  let dayOfWeek = day === 0 ? 1 : day + 1; // Sunday=1, Saturday=7
+  N = 4 + dayOfWeek; // Example: Sunday=5, Saturday=11
   solutionPath=generateHamiltonian(N);
   board=assignColors(solutionPath,document.getElementById("difficulty").value);
-  par= new Set(board.flat()).size-1;
+  par= countColorChanges(solutionPath, board);
   resetState();
   renderBoard();
 }
